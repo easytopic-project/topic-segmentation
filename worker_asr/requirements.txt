@@ -1,7 +1,0 @@
-pika
-numpy
-pymongo
-ws4py
-psycopg2
-websocket
-git+https://github.com/maxjf1/files-ms-client-python#egg=files-ms-client-python
