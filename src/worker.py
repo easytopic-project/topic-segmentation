@@ -18,7 +18,6 @@ from aubio import source
 from aubio import pitch as pt
 import pika
 import time
-from DAO.connection import Connection
 import os
 import multiprocessing
 import json
@@ -35,13 +34,12 @@ nltk.download('averaged_perceptron_tagger')
 
 stopwords = None
 googlenews_model_path = '/word2vec/GoogleNews-vectors-negative300.bin'
-stopwords_path = "document_similarity/data/stopwords_en.txt"
+stopwords_path = "src/document_similarity/data/stopwords_en.txt"
 docSim = None
 with open(stopwords_path, 'r') as fh:
     stopwords = fh.read().split(",")
 model = KeyedVectors.load_word2vec_format(googlenews_model_path, binary=True, limit=1000000)
 docSim = DocSim.DocSim(model, stopwords=stopwords)
-#
 
 
 class Summary:
@@ -77,6 +75,10 @@ LOG_FORMAT = ('%(levelname) -10s %(asctime)s %(name) -30s %(funcName) '
               '-35s %(lineno) -5d: %(message)s')
 LOGGER = logging.getLogger(__name__)
 
+FILES_SERVER = os.environ.get("FILES_SERVER", "localhost:3001") 
+QUEUE_SERVER_HOST, QUEUE_SERVER_PORT = os.environ.get("QUEUE_SERVER", "localhost:5672").split(":")
+Q_IN = os.environ.get("INPUT_QUEUE_NAME", "topic_segmentation_in")
+Q_OUT = os.environ.get("OUTPUT_QUEUE_NAME", "topic_segmentation_out")
 
 def callback(channel, method, properties, body, args):
 
@@ -91,18 +93,12 @@ def do_work(connection, channel, delivery_tag, body):
     try:
         print(" [x] Received %r" % body, flush=True)
         args = json.loads(body) 
-        oid = args['oid']
-        project_id = args['project_id']
-        conn = Connection()
-        # file = conn.get_file(oid)
-        # file = conn.get_doc_mongo(file_oid=oid)
-        file = download(args['file'], buffer=True)
+        llf = download(args['llf']['name'], url="http://" + FILES_SERVER, buffer=True)
+        asr = download(args['asr']['name'], url="http://" + FILES_SERVER, buffer=True)
 
-        result = ast.literal_eval(file.decode('utf-8'))
-        #print(result.keys(), flush=True)
         chunks = []
-        low_features_dict = ast.literal_eval(result['low_level_features'].decode('utf-8'))
-        asr_dict = ast.literal_eval(result['asr'].decode('utf-8'))
+        low_features_dict = ast.literal_eval(llf.decode('utf-8'))
+        asr_dict = ast.literal_eval(asr.decode('utf-8'))
         print(low_features_dict, flush=True)
         print(asr_dict, flush=True)
         for k, v in low_features_dict.items():
@@ -128,37 +124,19 @@ def do_work(connection, channel, delivery_tag, body):
         topics["topics"] = boundaries
         payload = bytes(str(topics), encoding='utf-8')
 
-        uploaded = upload(payload, buffer=True, mime='text/json')
+        uploaded = upload(payload, url="http://" + FILES_SERVER, buffer=True, mime='text/json')
+        message = {
+                **args,
+                'topic-segmentation-output': uploaded
+                }
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=QUEUE_SERVER_HOST, port=QUEUE_SERVER_PORT))
+        channel = connection.channel()
 
-        file_oid = conn.insert_doc_mongo(payload)
-        conn = Connection()
-        conn.insert_jobs(type='segmentation', status='done', file=file_oid, project_id=project_id)
-        #
-        # #print(result, flush=True)
-        # count = 0
-        # dict_result = {}
-        # previous_duration = 0
-        # for key, value in result.items():
-        #     result = main(value['bytes'])
-        #     dict_result[count] = result
-        #     count += 1
-        #     #time.sleep(1)
-        #
-        # payload = bytes(str(dict_result), encoding='utf-8')
-        # conn = Connection()
-        #
-        # #  inserts the result of processing in database
-        # file_oid = conn.insert_doc_mongo(payload)
-        # conn.insert_jobs(type='asr', status='done', file=file_oid, project_id=project_id)
-        #
-        # message = {'type': 'aggregator', 'status': 'new', 'oid': file_oid, 'project_id': project_id}
-        #
-        # #  post a message on topic_segmentation queue
-        # connection_out = pika.BlockingConnection(pika.ConnectionParameters(host=os.environ['QUEUE_SERVER']))
-        # channel2 = connection_out.channel()
-        #
-        # channel2.queue_declare(queue='aggregator', durable=True)
-        # channel2.basic_publish(exchange='', routing_key='aggregator', body=json.dumps(message))
+        channel.queue_declare(queue=Q_OUT, durable=True)
+        channel.basic_publish(
+            exchange='', routing_key=Q_OUT, body=json.dumps(message))
+
 
     except Exception as e:
         # print(e, flush=True)
@@ -184,7 +162,7 @@ def consume():
     while not success:
         try:
             connection = pika.BlockingConnection(
-                pika.ConnectionParameters(host=os.environ['QUEUE_SERVER'], heartbeat=5))
+                pika.ConnectionParameters(host=QUEUE_SERVER_HOST, port=QUEUE_SERVER_PORT, heartbeat=5))
             channel = connection.channel()
             success = True
         except:
@@ -193,13 +171,14 @@ def consume():
             pass
 
 
-    channel.queue_declare(queue='segmentation', durable=True)
-    print(' [*] Waiting for messages. To exit press CTRL+C')
+    channel.queue_declare(queue=Q_IN, durable=True)
+    channel.queue_declare(queue=Q_OUT, durable=True)
+    print(' [*] Waiting for messages. To exit press CTRL+C', flush=True)
     channel.basic_qos(prefetch_count=1)
 
     threads = []
     on_message_callback = functools.partial(callback, args=(connection, threads))
-    channel.basic_consume(queue='segmentation', on_message_callback=on_message_callback)
+    channel.basic_consume(queue=Q_IN, on_message_callback=on_message_callback)
     try:
         channel.start_consuming()
     except KeyboardInterrupt:
@@ -212,18 +191,3 @@ def consume():
     connection.close()
 
 consume()
-
-'''
-workers = int(os.environ['NUM_WORKERS'])
-pool = multiprocessing.Pool(processes=workers)
-for i in range(0, workers):
-    pool.apply_async(consume)
-
-# Stay alive
-try:
-    while True:
-        continue
-except KeyboardInterrupt:
-    print(' [*] Exiting...')
-    pool.terminate()
-    pool.join()'''

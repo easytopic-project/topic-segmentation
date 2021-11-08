@@ -1,7 +1,7 @@
 from sklearn.metrics import silhouette_samples, silhouette_score
 from random import randint
 import sys
-sys.path.insert(0, 'genetic_algorithm/')
+sys.path.insert(0, 'src/genetic_algorithm/')
 from individual import Individual
 from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances, polynomial_kernel, sigmoid_kernel, cosine_distances
 import numpy as np
