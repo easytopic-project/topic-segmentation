@@ -129,18 +129,19 @@ def do_work(connection, channel, delivery_tag, body):
                 **args,
                 'topic-segmentation-output': uploaded
                 }
-        connection = pika.BlockingConnection(
+        connection_out = pika.BlockingConnection(
             pika.ConnectionParameters(host=QUEUE_SERVER_HOST, port=QUEUE_SERVER_PORT))
-        channel = connection.channel()
+        channel2 = connection_out.channel()
 
-        channel.queue_declare(queue=Q_OUT, durable=True)
-        channel.basic_publish(
+        channel2.queue_declare(queue=Q_OUT, durable=True)
+        channel2.basic_publish(
             exchange='', routing_key=Q_OUT, body=json.dumps(message))
 
 
     except Exception as e:
         # print(e, flush=True)
         print('Connection Error %s' % e, flush=True)
+        
     print(" [x] Done", flush=True)
     cb = functools.partial(ack_message, channel, delivery_tag)
     connection.add_callback_threadsafe(cb)
