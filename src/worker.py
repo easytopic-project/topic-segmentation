@@ -174,7 +174,7 @@ def consume():
 
     channel.queue_declare(queue=Q_IN, durable=True)
     channel.queue_declare(queue=Q_OUT, durable=True)
-    print(' [*] Waiting for messages. To exit press CTRL+C', flush=True)
+    print(' [*] Waiting for messages. To exit press CTRL+C (channel fixed)', flush=True)
     channel.basic_qos(prefetch_count=1)
 
     threads = []
